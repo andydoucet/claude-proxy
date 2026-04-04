@@ -310,7 +310,7 @@ confirm_selection() {
     done
 
     echo ""
-    printf "  ${DIM}Proxy port: $PROXY_PORT | Max reasoning: forced on all models (except mini for fast validation)${RESET}\n"
+    printf "  ${DIM}Proxy port: $PROXY_PORT | Claude: client-controlled thinking | GPT/Gemini: high reasoning forced${RESET}\n"
     echo ""
     ask "Proceed with this configuration? [Y/n]: "
     read -r answer
@@ -375,23 +375,12 @@ remote-management:
 
 claude-api-key: []
 
-# Force max thinking/reasoning on ALL proxied requests
+# Thinking/reasoning overrides
+# Claude: no override — clients set their own thinking mode (e.g. adaptive)
+# GPT/Gemini: force high reasoning at proxy level
 payload:
   override:
 YAML_HEADER
-
-    if $has_claude; then
-        cat >> "$CONFIG_FILE" << 'CLAUDE_BLOCK'
-    # Claude models: force extended thinking
-    - models:
-        - name: "claude-*"
-      protocol: "claude"
-      params:
-        "thinking.type": "enabled"
-        "thinking.budget_tokens": 30000
-        "max_tokens": 128000
-CLAUDE_BLOCK
-    fi
 
     if $has_gpt; then
         cat >> "$CONFIG_FILE" << 'GPT_BLOCK'
@@ -667,7 +656,7 @@ print_summary() {
     echo "    $BINARY_NAME -config $CONFIG_FILE -codex-login"
     echo "    $BINARY_NAME -config $CONFIG_FILE -antigravity-login"
     echo ""
-    printf "  ${DIM}Max reasoning is forced at the proxy level for all models.${RESET}\n"
+    printf "  ${DIM}Claude: clients control thinking (adaptive supported). GPT/Gemini: high reasoning forced.${RESET}\n"
     echo ""
 }
 
