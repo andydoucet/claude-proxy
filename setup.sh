@@ -10,15 +10,22 @@
 set -uo pipefail
 
 # ── Constants ────────────────────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENDOR_DIR="$SCRIPT_DIR/vendor/cliproxyapi"
+VENDOR_MAIN="$VENDOR_DIR/cmd/server"
+
 PROXY_PORT=8317
 CONFIG_DIR="$HOME/.cli-proxy-api"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 FACTORY_DIR="$HOME/.factory"
 SETTINGS_FILE="$FACTORY_DIR/settings.json"
 INSTALL_DIR="$HOME/.local/bin"
-BINARY_NAME="cli-proxy-api-plus"
+BINARY_NAME="cli-proxy-api-plus"          # install target (kept for backward compat with droidc())
 BINARY_PATH="$INSTALL_DIR/$BINARY_NAME"
-GITHUB_REPO="router-for-me/CLIProxyAPIPlus"
+UPSTREAM_BINARY="cli-proxy-api"           # name of binary inside upstream release tarballs
+GITHUB_REPO="router-for-me/CLIProxyAPI"   # fallback source when building-from-source unavailable
+LAUNCHD_LABEL="sh.claude-proxy.daemon"
+LAUNCHD_PLIST="$HOME/Library/LaunchAgents/${LAUNCHD_LABEL}.plist"
 PROXY_PID=""
 
 # ── Colors ───────────────────────────────────────────────────────────────────
@@ -114,42 +121,90 @@ install_droid() {
     success "Factory Droid CLI installed"
 }
 
-install_proxy_binary() {
-    if [ -f "$BINARY_PATH" ]; then
-        local version
-        version=$("$BINARY_PATH" --help 2>&1 | head -1 | grep -o 'Version: [^ ,]*' | cut -d' ' -f2 || echo "unknown")
-        success "CLIProxyAPIPlus already installed ($version)"
-        ask "Re-download latest? [y/N]: "
-        read -r answer
-        if [ "$answer" != "y" ] && [ "$answer" != "Y" ]; then
-            return
-        fi
-    fi
+build_from_vendor() {
+    # Returns 0 on successful build, 1 if vendor/source/go unavailable or build failed.
+    [ -d "$VENDOR_DIR" ] || return 1
+    [ -f "$VENDOR_DIR/go.mod" ] || return 1
+    command_exists go || return 1
 
-    info "Fetching latest CLIProxyAPIPlus release..."
+    info "Building cli-proxy-api from vendor/cliproxyapi (Go $(go version 2>/dev/null | awk '{print $3}'))..."
+    mkdir -p "$INSTALL_DIR"
+    ( cd "$VENDOR_DIR" && GOFLAGS="-mod=mod" go build -trimpath -ldflags "-s -w" \
+        -o "$BINARY_PATH" ./cmd/server ) || return 1
+    success "Built from vendored source → $BINARY_PATH"
+    return 0
+}
+
+download_release_binary() {
+    info "Fetching latest CLIProxyAPI release from $GITHUB_REPO..."
+    local auth_header=()
+    [ -n "${GITHUB_TOKEN:-}" ] && auth_header=(-H "Authorization: Bearer $GITHUB_TOKEN")
+
     local download_url
-    download_url=$(curl -fsSL "https://api.github.com/repos/$GITHUB_REPO/releases/latest" | \
+    download_url=$(curl -fsSL "${auth_header[@]}" "https://api.github.com/repos/$GITHUB_REPO/releases/latest" | \
         grep "browser_download_url" | grep "$DOWNLOAD_ARCH" | head -1 | cut -d'"' -f4)
 
     if [ -z "$download_url" ]; then
         error "Could not find download URL for $DOWNLOAD_ARCH"
-        exit 1
+        error "Possible causes: GitHub rate-limit (set GITHUB_TOKEN), network error, or repo renamed."
+        error "Repo: https://github.com/$GITHUB_REPO/releases/latest"
+        return 1
     fi
 
-    info "Downloading from: $(basename "$download_url")"
+    info "Downloading: $(basename "$download_url")"
     local tmpdir
     tmpdir=$(mktemp -d)
-    curl -fsSL "$download_url" -o "$tmpdir/proxy.tar.gz"
-    tar xzf "$tmpdir/proxy.tar.gz" -C "$tmpdir"
+    curl -fsSL "${auth_header[@]}" "$download_url" -o "$tmpdir/proxy.tar.gz" || { rm -rf "$tmpdir"; return 1; }
+    tar xzf "$tmpdir/proxy.tar.gz" -C "$tmpdir" || { rm -rf "$tmpdir"; return 1; }
+
+    if [ ! -f "$tmpdir/$UPSTREAM_BINARY" ]; then
+        error "Expected '$UPSTREAM_BINARY' inside tarball; got:"
+        ls -1 "$tmpdir" | sed 's/^/  /'
+        rm -rf "$tmpdir"
+        return 1
+    fi
 
     mkdir -p "$INSTALL_DIR"
-    cp "$tmpdir/$BINARY_NAME" "$BINARY_PATH"
+    cp "$tmpdir/$UPSTREAM_BINARY" "$BINARY_PATH"
     chmod +x "$BINARY_PATH"
     rm -rf "$tmpdir"
+    success "Downloaded release binary → $BINARY_PATH"
+    return 0
+}
+
+install_proxy_binary() {
+    if [ -f "$BINARY_PATH" ]; then
+        local version
+        version=$("$BINARY_PATH" --help 2>&1 | head -1 | grep -o 'Version: [^ ,]*' | cut -d' ' -f2 || echo "unknown")
+        success "cli-proxy-api already installed ($version)"
+        # Skip prompt on non-TTY so curl|bash / CI don't hang.
+        if [ -t 0 ]; then
+            ask "Re-install (from vendored source if Go present, else download)? [y/N]: "
+            read -r answer
+            if [ "$answer" != "y" ] && [ "$answer" != "Y" ]; then
+                return
+            fi
+        else
+            return
+        fi
+    fi
+
+    # Prefer vendored source build — keeps the repo standalone-tweakable.
+    if build_from_vendor; then
+        return
+    fi
+
+    # Fallback: downloaded release binary.
+    if [ -d "$VENDOR_DIR" ] && ! command_exists go; then
+        warn "vendor/cliproxyapi exists but Go toolchain is missing."
+        warn "Install Go to build from source: brew install go"
+        warn "Falling back to release download for now."
+    fi
+    download_release_binary || { error "Could not install cli-proxy-api."; exit 1; }
 
     local version
     version=$("$BINARY_PATH" --help 2>&1 | head -1 | grep -o 'Version: [^ ,]*' | cut -d' ' -f2 || echo "unknown")
-    success "CLIProxyAPIPlus installed ($version)"
+    success "cli-proxy-api installed ($version)"
 }
 
 ensure_path() {
@@ -488,12 +543,61 @@ generate_settings_json() {
         validation_model_id="$default_model_id"
     fi
 
+    # Merge (not overwrite) when jq is available and settings.json already exists.
+    # Merge rules:
+    #   - customModels: REPLACE wholesale (re-runs idempotent, no orphan entries)
+    #   - sessionDefaultSettings.model: REPLACE (user wants proxy-routed default)
+    #   - other sessionDefaultSettings keys: PRESERVE if present, default otherwise
+    #     (do NOT silently flip autonomyMode, specModeReasoningEffort, etc.)
+    #   - missionModelSettings: REPLACE workerModel/validationWorkerModel; merge rest
+    #   - UI flags (showThinkingInMainView, showTokenUsageIndicator): set only if absent
+    #   - Every other user-owned key (hooks, commandAllowlist, commandDenylist, etc.): PRESERVE
+    if command_exists jq && [ -f "$SETTINGS_FILE" ]; then
+        backup_if_exists "$SETTINGS_FILE"
+        local tmp="$SETTINGS_FILE.tmp.$$"
+        jq \
+          --argjson newModels "[${models_json}
+  ]" \
+          --arg defaultId "$default_model_id" \
+          --arg validatorId "$validation_model_id" \
+          '.customModels = $newModels
+           | .sessionDefaultSettings = (
+               {reasoningEffort: "high", interactionMode: "auto", autonomyLevel: "high", autonomyMode: "auto-high"}
+               + (.sessionDefaultSettings // {})
+               + {model: $defaultId}
+             )
+           | .missionModelSettings = ((.missionModelSettings // {}) + {
+               workerModel: $defaultId,
+               workerReasoningEffort: "high",
+               validationWorkerModel: $validatorId,
+               validationWorkerReasoningEffort: "none"
+             })
+           | .showThinkingInMainView //= true
+           | .showTokenUsageIndicator //= true' \
+          "$SETTINGS_FILE" > "$tmp" 2>/dev/null
+
+        if jq empty "$tmp" 2>/dev/null; then
+            mv "$tmp" "$SETTINGS_FILE"
+            success "Merged settings into $SETTINGS_FILE (preserved existing keys)"
+            info "Default model: ${default_model_id}"
+            info "Mission worker: ${default_model_id} (reasoning: high)"
+            info "Mission validator: ${validation_model_id} (reasoning: none)"
+            return
+        fi
+        rm -f "$tmp"
+        warn "jq merge produced invalid JSON; falling back to fresh-file write"
+    elif ! command_exists jq && [ -f "$SETTINGS_FILE" ]; then
+        warn "jq not installed — cannot merge existing settings.json, will OVERWRITE."
+        warn "Install jq (brew install jq) and re-run for non-destructive merge."
+    fi
+
+    # Fresh-file write (first run OR jq missing OR merge failed). backup_if_exists already ran above if applicable.
+    [ -f "$SETTINGS_FILE" ] && backup_if_exists "$SETTINGS_FILE"
     cat > "$SETTINGS_FILE" << SETTINGS_EOF
 {
   "showThinkingInMainView": true,
   "customModels": [${models_json}
   ],
-  "model": "custom-model",
   "sessionDefaultSettings": {
     "model": "${default_model_id}",
     "reasoningEffort": "high",
@@ -591,12 +695,24 @@ ZSHRC_BLOCK
 test_proxy() {
     info "Testing proxy startup..."
 
-    # Kill any existing proxy on our port
-    local existing_pid
-    existing_pid=$(lsof -t -i :$PROXY_PORT 2>/dev/null)
+    # Identify port owner before killing — only stop if it's our own binary.
+    # Previously this did a silent `kill` which happily terminated unrelated processes.
+    local existing_pid existing_cmd
+    existing_pid=$(lsof -t -i :$PROXY_PORT 2>/dev/null | head -1)
     if [ -n "$existing_pid" ]; then
-        kill "$existing_pid" 2>/dev/null
-        sleep 1
+        existing_cmd=$(ps -p "$existing_pid" -o comm= 2>/dev/null | xargs -I{} basename {} 2>/dev/null)
+        case "$existing_cmd" in
+            "$BINARY_NAME"|"$UPSTREAM_BINARY"|cli-proxy-api*)
+                info "Stopping existing proxy (PID $existing_pid, '$existing_cmd')"
+                kill "$existing_pid" 2>/dev/null
+                sleep 1
+                ;;
+            *)
+                error "Port $PROXY_PORT is held by '$existing_cmd' (PID $existing_pid), not our binary."
+                error "Stop that process manually or change PROXY_PORT, then re-run."
+                return 1
+                ;;
+        esac
     fi
 
     "$BINARY_PATH" -config "$CONFIG_FILE" &>/dev/null &
@@ -621,7 +737,89 @@ test_proxy() {
     fi
 }
 
-# ── Step 8: Summary ──────────────────────────────────────────────────────────
+# ── Step 8: LaunchAgent (macOS auto-start / keep-alive) ─────────────────────
+
+install_launchd_service() {
+    # Prompt on TTY; skip silently on non-TTY (curl|bash).
+    if [ -t 0 ]; then
+        ask "Install LaunchAgent so the proxy auto-starts at login + restarts on crash? [Y/n]: "
+        read -r answer
+        case "$answer" in
+            n|N) info "Skipped LaunchAgent install."; return ;;
+        esac
+    else
+        info "Non-interactive mode: skipping LaunchAgent install (set up manually if wanted)."
+        return
+    fi
+
+    mkdir -p "$(dirname "$LAUNCHD_PLIST")"
+
+    # Unload any prior version before rewriting so we don't have two daemons.
+    launchctl unload "$LAUNCHD_PLIST" 2>/dev/null || true
+
+    cat > "$LAUNCHD_PLIST" << PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTD/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${LAUNCHD_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${BINARY_PATH}</string>
+    <string>-config</string>
+    <string>${CONFIG_FILE}</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>${CONFIG_DIR}/proxy.log</string>
+  <key>StandardErrorPath</key><string>${CONFIG_DIR}/proxy.log</string>
+  <key>WorkingDirectory</key><string>${HOME}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key><string>${HOME}</string>
+  </dict>
+</dict>
+</plist>
+PLIST
+
+    # Hand control to launchd: kill any manual nohup instance first.
+    if [ -f /tmp/claude-proxy.pid ]; then
+        local manual_pid
+        manual_pid=$(cat /tmp/claude-proxy.pid 2>/dev/null)
+        if [ -n "$manual_pid" ] && kill -0 "$manual_pid" 2>/dev/null; then
+            info "Stopping manual proxy (PID $manual_pid) — handing control to launchd"
+            kill "$manual_pid" 2>/dev/null
+            sleep 1
+        fi
+    fi
+    # Also sweep any non-pid-file owners that match our binary name.
+    local stragglers
+    stragglers=$(lsof -t -i :"$PROXY_PORT" 2>/dev/null)
+    for p in $stragglers; do
+        local cmd
+        cmd=$(ps -p "$p" -o comm= 2>/dev/null | xargs -I{} basename {} 2>/dev/null)
+        case "$cmd" in
+            "$BINARY_NAME"|"$UPSTREAM_BINARY"|cli-proxy-api*)
+                kill "$p" 2>/dev/null ;;
+        esac
+    done
+    sleep 1
+
+    launchctl load "$LAUNCHD_PLIST"
+    sleep 2
+
+    if launchctl list 2>/dev/null | grep -q "$LAUNCHD_LABEL"; then
+        success "LaunchAgent loaded → $LAUNCHD_PLIST"
+        info "  start at login + restart on crash (KeepAlive=true)"
+        info "  stop:    launchctl unload $LAUNCHD_PLIST"
+        info "  restart: launchctl unload $LAUNCHD_PLIST && launchctl load $LAUNCHD_PLIST"
+    else
+        warn "LaunchAgent file written but not in launchctl list."
+        warn "Check with: launchctl list | grep claude-proxy"
+    fi
+}
+
+# ── Step 9: Summary ──────────────────────────────────────────────────────────
 
 print_summary() {
     echo ""
@@ -670,38 +868,42 @@ main() {
     detect_arch
     echo ""
 
-    info "Step 1/7: Installing dependencies..."
+    info "Step 1/8: Installing dependencies..."
     install_homebrew
     install_droid
     install_proxy_binary
     ensure_path
     echo ""
 
-    info "Step 2/7: Select providers..."
+    info "Step 2/8: Select providers..."
     select_providers
 
-    info "Step 3/7: Select models..."
+    info "Step 3/8: Select models..."
     for provider in "${SELECTED_PROVIDERS[@]}"; do
         select_models_for_provider "$provider"
     done
 
     confirm_selection
 
-    info "Step 4/7: Generating config files..."
+    info "Step 4/8: Generating config files..."
     generate_config_yaml
     generate_settings_json
     echo ""
 
-    info "Step 5/7: Authentication..."
+    info "Step 5/8: Authentication..."
     authenticate_all
     echo ""
 
-    info "Step 6/7: Shell integration..."
+    info "Step 6/8: Shell integration..."
     install_zshrc_function
     echo ""
 
-    info "Step 7/7: Validation..."
+    info "Step 7/8: Validation..."
     test_proxy
+    echo ""
+
+    info "Step 8/8: LaunchAgent (auto-start at login + restart on crash)..."
+    install_launchd_service
     echo ""
 
     print_summary

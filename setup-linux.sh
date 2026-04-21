@@ -18,15 +18,20 @@
 set -uo pipefail
 
 # ── Constants ────────────────────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENDOR_DIR="$SCRIPT_DIR/vendor/cliproxyapi"
+VENDOR_MAIN="$VENDOR_DIR/cmd/server"
+
 PROXY_PORT=8317
 CONFIG_DIR="$HOME/.cli-proxy-api"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 FACTORY_DIR="$HOME/.factory"
 SETTINGS_FILE="$FACTORY_DIR/settings.json"
 INSTALL_DIR="$HOME/.local/bin"
-BINARY_NAME="cli-proxy-api-plus"
+BINARY_NAME="cli-proxy-api-plus"          # install target (kept for backward compat with droidc())
 BINARY_PATH="$INSTALL_DIR/$BINARY_NAME"
-GITHUB_REPO="router-for-me/CLIProxyAPIPlus"
+UPSTREAM_BINARY="cli-proxy-api"           # name of binary inside upstream release tarballs
+GITHUB_REPO="router-for-me/CLIProxyAPI"   # fallback source when building-from-source unavailable
 PROXY_PID=""
 
 # ── CLI flags ────────────────────────────────────────────────────────────────
@@ -250,13 +255,70 @@ install_droid_linux() {
     warn "Install it manually: https://docs.factory.ai/install"
 }
 
+build_from_vendor() {
+    # Returns 0 on successful build, 1 if vendor/source/go unavailable or build failed.
+    [ -d "$VENDOR_DIR" ] || return 1
+    [ -f "$VENDOR_DIR/go.mod" ] || return 1
+    command -v go >/dev/null 2>&1 || return 1
+
+    info "Building cli-proxy-api from vendor/cliproxyapi (Go $(go version 2>/dev/null | awk '{print $3}'))..."
+    mkdir -p "$INSTALL_DIR"
+    ( cd "$VENDOR_DIR" && GOFLAGS="-mod=mod" go build -trimpath -ldflags "-s -w" \
+        -o "$BINARY_PATH" ./cmd/server ) || return 1
+    success "Built from vendored source → $BINARY_PATH"
+    return 0
+}
+
+download_release_binary() {
+    info "Fetching latest CLIProxyAPI release from $GITHUB_REPO..."
+    local auth_header=()
+    [ -n "${GITHUB_TOKEN:-}" ] && auth_header=(-H "Authorization: Bearer $GITHUB_TOKEN")
+
+    local download_url
+    download_url=$(curl -fsSL "${auth_header[@]}" "https://api.github.com/repos/$GITHUB_REPO/releases/latest" | \
+        grep "browser_download_url" | grep "$DOWNLOAD_ARCH" | head -1 | cut -d'"' -f4)
+
+    if [ -z "$download_url" ]; then
+        error "Could not find download URL for $DOWNLOAD_ARCH"
+        error "Possible causes: GitHub rate-limit (set GITHUB_TOKEN), network error, or repo renamed."
+        error "Repo: https://github.com/$GITHUB_REPO/releases/latest"
+        return 1
+    fi
+
+    info "Downloading: $(basename "$download_url")"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    curl -fsSL "${auth_header[@]}" "$download_url" -o "$tmpdir/proxy.tar.gz" || { rm -rf "$tmpdir"; return 1; }
+    tar xzf "$tmpdir/proxy.tar.gz" -C "$tmpdir" || { rm -rf "$tmpdir"; return 1; }
+
+    mkdir -p "$INSTALL_DIR"
+    local found_binary
+    found_binary=$(find "$tmpdir" -name "$UPSTREAM_BINARY" -type f 2>/dev/null | head -1)
+    if [ -z "$found_binary" ]; then
+        # last resort: first executable in tree
+        found_binary=$(find "$tmpdir" -type f -executable 2>/dev/null | head -1)
+    fi
+    if [ -z "$found_binary" ]; then
+        error "Could not find '$UPSTREAM_BINARY' in downloaded archive"
+        ls -1 "$tmpdir" | sed 's/^/  /'
+        rm -rf "$tmpdir"
+        return 1
+    fi
+
+    cp "$found_binary" "$BINARY_PATH"
+    chmod +x "$BINARY_PATH"
+    rm -rf "$tmpdir"
+    success "Downloaded release binary → $BINARY_PATH"
+    return 0
+}
+
 install_proxy_binary() {
     if [ -f "$BINARY_PATH" ]; then
         local version
         version=$("$BINARY_PATH" --help 2>&1 | head -1 | grep -o 'Version: [^ ,]*' | cut -d' ' -f2 || echo "unknown")
-        success "CLIProxyAPIPlus already installed ($version)"
+        success "cli-proxy-api already installed ($version)"
         if ! $NON_INTERACTIVE; then
-            ask "Re-download latest? [y/N]: "
+            ask "Re-install (from vendored source if Go present, else download)? [y/N]: "
             read -r answer
             if [ "$answer" != "y" ] && [ "$answer" != "Y" ]; then
                 return
@@ -266,44 +328,21 @@ install_proxy_binary() {
         fi
     fi
 
-    info "Fetching latest CLIProxyAPIPlus release..."
-    local download_url
-    download_url=$(curl -fsSL "https://api.github.com/repos/$GITHUB_REPO/releases/latest" | \
-        grep "browser_download_url" | grep "$DOWNLOAD_ARCH" | head -1 | cut -d'"' -f4)
-
-    if [ -z "$download_url" ]; then
-        error "Could not find download URL for $DOWNLOAD_ARCH"
-        error "Check: https://github.com/$GITHUB_REPO/releases"
-        exit 1
+    # Prefer vendored source build — keeps the repo standalone-tweakable.
+    if build_from_vendor; then
+        return
     fi
 
-    info "Downloading: $(basename "$download_url")"
-    local tmpdir
-    tmpdir=$(mktemp -d)
-    curl -fsSL "$download_url" -o "$tmpdir/proxy.tar.gz"
-    tar xzf "$tmpdir/proxy.tar.gz" -C "$tmpdir"
-
-    mkdir -p "$INSTALL_DIR"
-    # Find the binary — it may be in a subdirectory
-    local found_binary
-    found_binary=$(find "$tmpdir" -name "$BINARY_NAME" -type f 2>/dev/null | head -1)
-    if [ -z "$found_binary" ]; then
-        # Try finding any executable
-        found_binary=$(find "$tmpdir" -type f -executable 2>/dev/null | head -1)
+    if [ -d "$VENDOR_DIR" ] && ! command -v go >/dev/null 2>&1; then
+        warn "vendor/cliproxyapi exists but Go toolchain is missing."
+        warn "Install Go (e.g. apt-get install golang, or from https://go.dev/dl) and re-run to build from source."
+        warn "Falling back to release download for now."
     fi
-    if [ -z "$found_binary" ]; then
-        error "Could not find binary in downloaded archive"
-        rm -rf "$tmpdir"
-        exit 1
-    fi
-
-    cp "$found_binary" "$BINARY_PATH"
-    chmod +x "$BINARY_PATH"
-    rm -rf "$tmpdir"
+    download_release_binary || { error "Could not install cli-proxy-api."; exit 1; }
 
     local version
     version=$("$BINARY_PATH" --help 2>&1 | head -1 | grep -o 'Version: [^ ,]*' | cut -d' ' -f2 || echo "unknown")
-    success "CLIProxyAPIPlus installed ($version)"
+    success "cli-proxy-api installed ($version)"
 }
 
 ensure_path() {
@@ -693,12 +732,53 @@ generate_settings_json() {
         validation_model_id="$default_model_id"
     fi
 
+    # Merge (not overwrite) when jq is available and settings.json already exists.
+    # See setup.sh for merge rules — same behavior here.
+    if command -v jq >/dev/null 2>&1 && [ -f "$SETTINGS_FILE" ]; then
+        backup_if_exists "$SETTINGS_FILE"
+        local tmp="$SETTINGS_FILE.tmp.$$"
+        jq \
+          --argjson newModels "[${models_json}
+  ]" \
+          --arg defaultId "$default_model_id" \
+          --arg validatorId "$validation_model_id" \
+          '.customModels = $newModels
+           | .sessionDefaultSettings = (
+               {reasoningEffort: "high", interactionMode: "auto", autonomyLevel: "high", autonomyMode: "auto-high"}
+               + (.sessionDefaultSettings // {})
+               + {model: $defaultId}
+             )
+           | .missionModelSettings = ((.missionModelSettings // {}) + {
+               workerModel: $defaultId,
+               workerReasoningEffort: "high",
+               validationWorkerModel: $validatorId,
+               validationWorkerReasoningEffort: "none"
+             })
+           | .showThinkingInMainView //= true
+           | .showTokenUsageIndicator //= true' \
+          "$SETTINGS_FILE" > "$tmp" 2>/dev/null
+
+        if jq empty "$tmp" 2>/dev/null; then
+            mv "$tmp" "$SETTINGS_FILE"
+            success "Merged settings into $SETTINGS_FILE (preserved existing keys)"
+            info "Default model: ${default_model_id}"
+            info "Mission worker: ${default_model_id} (reasoning: high)"
+            info "Mission validator: ${validation_model_id} (reasoning: none)"
+            return
+        fi
+        rm -f "$tmp"
+        warn "jq merge produced invalid JSON; falling back to fresh-file write"
+    elif ! command -v jq >/dev/null 2>&1 && [ -f "$SETTINGS_FILE" ]; then
+        warn "jq not installed — cannot merge existing settings.json, will OVERWRITE."
+        warn "Install jq (apt-get install jq, yum install jq, etc.) and re-run for non-destructive merge."
+    fi
+
+    [ -f "$SETTINGS_FILE" ] && backup_if_exists "$SETTINGS_FILE"
     cat > "$SETTINGS_FILE" << SETTINGS_EOF
 {
   "showThinkingInMainView": true,
   "customModels": [${models_json}
   ],
-  "model": "custom-model",
   "sessionDefaultSettings": {
     "model": "${default_model_id}",
     "reasoningEffort": "high",
@@ -885,12 +965,24 @@ SERVICE_EOF
 test_proxy() {
     info "Testing proxy startup..."
 
-    # Kill any existing proxy on our port
-    local existing_pid
+    # Identify port owner before killing — only stop if it's our own binary.
+    # Previously this did a silent `kill` which terminated unrelated processes.
+    local existing_pid existing_cmd
     existing_pid=$(pid_on_port "$PROXY_PORT")
     if [ -n "$existing_pid" ]; then
-        kill "$existing_pid" 2>/dev/null
-        sleep 1
+        existing_cmd=$(ps -p "$existing_pid" -o comm= 2>/dev/null | xargs -I{} basename {} 2>/dev/null)
+        case "$existing_cmd" in
+            "$BINARY_NAME"|"$UPSTREAM_BINARY"|cli-proxy-api*)
+                info "Stopping existing proxy (PID $existing_pid, '$existing_cmd')"
+                kill "$existing_pid" 2>/dev/null
+                sleep 1
+                ;;
+            *)
+                error "Port $PROXY_PORT is held by '$existing_cmd' (PID $existing_pid), not our binary."
+                error "Stop that process manually or use --port <N>, then re-run."
+                return 1
+                ;;
+        esac
     fi
 
     "$BINARY_PATH" -config "$CONFIG_FILE" &>/dev/null &
