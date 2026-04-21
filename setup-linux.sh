@@ -383,6 +383,8 @@ ensure_path() {
 get_models_for_provider() {
     case "$1" in
         claude)
+            # First claude-opus-* wins as session default (see selector below).
+            echo "claude-opus-4-7|Opus 4.7 [Claude Max]|128000|anthropic|http://localhost:$PROXY_PORT"
             echo "claude-opus-4-6|Opus 4.6 1M [Claude Max]|128000|anthropic|http://localhost:$PROXY_PORT"
             echo "claude-sonnet-4-6|Sonnet 4.6 [Claude Max]|64000|anthropic|http://localhost:$PROXY_PORT"
             echo "claude-haiku-4-5|Haiku 4.5 [Claude Max]|32000|anthropic|http://localhost:$PROXY_PORT"
@@ -703,7 +705,9 @@ generate_settings_json() {
         index=$((index + 1))
     done
 
+    # First claude-opus-* wins as default (order in get_models_for_provider controls which).
     local default_model_id=""
+    local default_opus_set=""
     local validation_model_id=""
     for m in "${SELECTED_MODELS[@]}"; do
         IFS='|' read -r mid dname mtokens ptype burl <<< "$m"
@@ -722,7 +726,12 @@ generate_settings_json() {
             default_model_id="$this_id"
         fi
         case "$mid" in
-            claude-opus-*) default_model_id="$this_id" ;;
+            claude-opus-*)
+                if [ -z "$default_opus_set" ]; then
+                    default_model_id="$this_id"
+                    default_opus_set=1
+                fi
+                ;;
         esac
         case "$mid" in
             gpt-5.4-mini) validation_model_id="$this_id" ;;

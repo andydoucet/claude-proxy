@@ -225,6 +225,9 @@ ensure_path() {
 get_models_for_provider() {
     case "$1" in
         claude)
+            # Order = menu order in Droid. First claude-opus-* entry wins as session default
+            # (see default_model_id selector below).
+            echo "claude-opus-4-7|Opus 4.7 [Claude Max]|128000|anthropic|http://localhost:$PROXY_PORT"
             echo "claude-opus-4-6|Opus 4.6 1M [Claude Max]|128000|anthropic|http://localhost:$PROXY_PORT"
             echo "claude-sonnet-4-6|Sonnet 4.6 [Claude Max]|64000|anthropic|http://localhost:$PROXY_PORT"
             echo "claude-haiku-4-5|Haiku 4.5 [Claude Max]|32000|anthropic|http://localhost:$PROXY_PORT"
@@ -509,8 +512,11 @@ generate_settings_json() {
         index=$((index + 1))
     done
 
-    # Find the first claude-opus model ID for default, fallback to first model
+    # Pick default model: first claude-opus-* in the list (so ordering in
+    # get_models_for_provider controls which Opus becomes session default).
+    # Fall back to the first model overall if no claude-opus-* is selected.
     local default_model_id=""
+    local default_opus_set=""     # sticky flag: first opus wins
     local validation_model_id=""
     for m in "${SELECTED_MODELS[@]}"; do
         IFS='|' read -r mid dname mtokens ptype burl <<< "$m"
@@ -526,12 +532,18 @@ generate_settings_json() {
             midx=$((midx + 1))
         done
         local this_id="custom:${safe_name}-${midx}"
-        # Default model: prefer claude-opus
+        # Fallback default: first model overall
         if [ -z "$default_model_id" ]; then
             default_model_id="$this_id"
         fi
+        # Preferred default: first claude-opus-* (once set, don't overwrite)
         case "$mid" in
-            claude-opus-*) default_model_id="$this_id" ;;
+            claude-opus-*)
+                if [ -z "$default_opus_set" ]; then
+                    default_model_id="$this_id"
+                    default_opus_set=1
+                fi
+                ;;
         esac
         # Validation model: prefer gpt-5.4-mini
         case "$mid" in
