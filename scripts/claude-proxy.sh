@@ -137,7 +137,7 @@ ${BOLD}COMMANDS${RESET}
   logs [-f]            Tail the proxy log (\`-f\` to follow)
   update               git subtree pull upstream source, rebuild, restart
   uninstall [flags]    Reverse the install. Flags: --keep-tokens --keep-config
-  auth <provider>      Run OAuth for: claude|github-copilot|codex|antigravity|kimi
+  auth <provider>      Run OAuth for: claude|codex|antigravity
   models               List models served by \`/v1/models\`
   version              Print binary version
   help                 This message
@@ -416,8 +416,8 @@ cmd_auth() {
     require_binary
     local provider="${1:-}"
     case "$provider" in
-        claude|github-copilot|codex|antigravity|kimi) ;;
-        "") die "Usage: claude-proxy auth <claude|github-copilot|codex|antigravity|kimi>" ;;
+        claude|codex|antigravity) ;;
+        "") die "Usage: claude-proxy auth <claude|codex|antigravity>" ;;
         *) die "Unknown provider: $provider" ;;
     esac
     info "Starting $provider OAuth (browser will open; complete login)..."

@@ -3,7 +3,7 @@
 # CLIProxyAPIPlus + Factory Droid CLI — Interactive Installer for macOS
 # =============================================================================
 # Configures a local proxy that routes AI model requests through your
-# existing subscriptions (Claude Max, GitHub Copilot, OpenAI Max, Antigravity)
+# existing subscriptions (Claude Max, OpenAI Max / Codex, Antigravity)
 # to Factory Droid CLI with max reasoning enabled on all models.
 # =============================================================================
 
@@ -73,7 +73,7 @@ show_banner() {
     echo "  ║   proxy with max reasoning on all models.         ║"
     echo "  ╚═══════════════════════════════════════════════════╝"
     printf "${RESET}\n"
-    printf "  ${DIM}Supports: Claude Max • GitHub Copilot • OpenAI Max • Antigravity${RESET}\n\n"
+    printf "  ${DIM}Supports: Claude Max • OpenAI Max / Codex • Antigravity${RESET}\n\n"
 }
 
 # ── Step 1: Prerequisites ───────────────────────────────────────────────────
@@ -232,12 +232,6 @@ get_models_for_provider() {
             echo "claude-sonnet-4-6|Sonnet 4.6 [Claude Max]|64000|anthropic|http://localhost:$PROXY_PORT"
             echo "claude-haiku-4-5|Haiku 4.5 [Claude Max]|32000|anthropic|http://localhost:$PROXY_PORT"
             ;;
-        github-copilot)
-            echo "gpt-5.4|GPT-5.4 High [Copilot]|32768|openai|http://localhost:$PROXY_PORT/v1"
-            echo "gpt-5.4-mini|GPT-5.4 Mini Fast [Copilot]|16384|openai|http://localhost:$PROXY_PORT/v1"
-            echo "gpt-5.3-codex|GPT-5.3-Codex High [Copilot]|64000|openai|http://localhost:$PROXY_PORT/v1"
-            echo "gemini-3.1-pro-preview|Gemini 3.1 Pro High [Copilot]|65536|generic-chat-completion-api|http://localhost:$PROXY_PORT/v1"
-            ;;
         codex)
             echo "gpt-5-codex|GPT-5-Codex High [OpenAI Max]|64000|openai|http://localhost:$PROXY_PORT/v1"
             echo "gpt-5|GPT-5 High [OpenAI Max]|32768|openai|http://localhost:$PROXY_PORT/v1"
@@ -252,7 +246,6 @@ get_models_for_provider() {
 get_provider_name() {
     case "$1" in
         claude)          echo "Claude Max" ;;
-        github-copilot)  echo "GitHub Copilot" ;;
         codex)           echo "OpenAI Max / Codex" ;;
         antigravity)     echo "Antigravity" ;;
     esac
@@ -260,8 +253,7 @@ get_provider_name() {
 
 get_provider_desc() {
     case "$1" in
-        claude)          echo "Opus 4.6, Sonnet 4.6, Haiku 4.5" ;;
-        github-copilot)  echo "GPT-5.4, GPT-5.4 Mini, GPT-5.3-Codex, Gemini 3.1 Pro" ;;
+        claude)          echo "Opus 4.7, Opus 4.6, Sonnet 4.6, Haiku 4.5" ;;
         codex)           echo "GPT-5-Codex, GPT-5" ;;
         antigravity)     echo "Gemini 3 Pro, Gemini 3 Flash" ;;
     esac
@@ -270,7 +262,6 @@ get_provider_desc() {
 get_auth_flag() {
     case "$1" in
         claude)          echo "-claude-login" ;;
-        github-copilot)  echo "-github-copilot-login" ;;
         codex)           echo "-codex-login" ;;
         antigravity)     echo "-antigravity-login" ;;
     esac
@@ -281,7 +272,7 @@ SELECTED_PROVIDERS=()
 SELECTED_MODELS=()
 
 select_providers() {
-    local providers=("claude" "github-copilot" "codex" "antigravity")
+    local providers=("claude" "codex" "antigravity")
 
     echo ""
     printf "${BOLD}Which providers do you want to configure?${RESET}\n"
@@ -385,7 +376,7 @@ generate_config_yaml() {
     backup_if_exists "$CONFIG_FILE"
 
     # Determine which override blocks are needed
-    local has_claude=false has_gpt=false has_gemini_copilot=false has_gemini_antigravity=false
+    local has_claude=false has_gpt=false has_gemini_antigravity=false
 
     for m in "${SELECTED_MODELS[@]}"; do
         IFS='|' read -r mid dname mtokens ptype burl <<< "$m"
@@ -397,11 +388,6 @@ generate_config_yaml() {
 
     for p in "${SELECTED_PROVIDERS[@]}"; do
         case "$p" in
-            github-copilot)
-                for m in "${SELECTED_MODELS[@]}"; do
-                    case "$m" in gemini-*) has_gemini_copilot=true ;; esac
-                done
-                ;;
             antigravity) has_gemini_antigravity=true ;;
         esac
     done
@@ -451,17 +437,6 @@ YAML_HEADER
       params:
         "reasoning.effort": "high"
 GPT_BLOCK
-    fi
-
-    if $has_gemini_copilot; then
-        cat >> "$CONFIG_FILE" << 'GEMINI_COPILOT_BLOCK'
-    # Gemini models via Copilot: force high thinking
-    - models:
-        - name: "gemini-*"
-      protocol: "gemini"
-      params:
-        "generationConfig.thinkingConfig.thinkingLevel": "high"
-GEMINI_COPILOT_BLOCK
     fi
 
     if $has_gemini_antigravity; then
@@ -862,7 +837,6 @@ print_summary() {
     echo ""
     printf "  ${BOLD}Re-authenticate a provider:${RESET}\n"
     echo "    $BINARY_NAME -config $CONFIG_FILE -claude-login"
-    echo "    $BINARY_NAME -config $CONFIG_FILE -github-copilot-login"
     echo "    $BINARY_NAME -config $CONFIG_FILE -codex-login"
     echo "    $BINARY_NAME -config $CONFIG_FILE -antigravity-login"
     echo ""

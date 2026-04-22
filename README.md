@@ -1,6 +1,6 @@
 # claude-proxy
 
-A self-contained installer for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) + [Factory Droid CLI](https://docs.factory.ai/cli) that routes AI model requests through your existing OAuth subscriptions (Claude Max, GitHub Copilot, OpenAI Max, Antigravity) on `localhost:8317`.
+A self-contained installer for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) + [Factory Droid CLI](https://docs.factory.ai/cli) that routes AI model requests through your existing OAuth subscriptions (Claude Max, OpenAI Max / Codex, Antigravity) on `localhost:8317`.
 
 The upstream CLIProxyAPI source is vendored at `vendor/cliproxyapi/` via `git subtree`, so this repo is **standalone** — you can build, modify, and ship without depending on a live upstream.
 
@@ -46,7 +46,7 @@ bash setup-linux.sh --non-interactive --providers claude  # one-liner
 
 ```
 --non-interactive    Run without prompts (use defaults or --providers)
---providers LIST     Comma-separated: claude,github-copilot,codex,antigravity
+--providers LIST     Comma-separated: claude,codex,antigravity
 --port PORT          Proxy port (default: 8317)
 --skip-auth          Skip OAuth (configure tokens later)
 --skip-droid         Skip Factory Droid CLI installation
@@ -80,10 +80,8 @@ Re-auth any provider at any time:
 
 ```bash
 cli-proxy-api-plus -config ~/.cli-proxy-api/config.yaml -claude-login
-cli-proxy-api-plus -config ~/.cli-proxy-api/config.yaml -github-copilot-login
 cli-proxy-api-plus -config ~/.cli-proxy-api/config.yaml -codex-login
 cli-proxy-api-plus -config ~/.cli-proxy-api/config.yaml -antigravity-login
-cli-proxy-api-plus -config ~/.cli-proxy-api/config.yaml -kimi-login
 ```
 
 Tokens auto-refresh every 15 min while the proxy is running.
