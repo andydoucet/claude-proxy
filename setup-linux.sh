@@ -269,6 +269,35 @@ build_from_vendor() {
     return 0
 }
 
+# Prebuilt binaries of the PATCHED vendored source, published as releases on
+# this repo (assets named cli-proxy-api-plus-<arch>). Preferred over the
+# upstream release when Go is unavailable: the upstream binary lacks local
+# patches (e.g. the mcp__agent__ OAuth tool-name prefix that keeps third-party
+# agent traffic on subscription billing instead of "extra usage").
+PATCHED_RELEASE_REPO="andydoucet/claude-proxy"
+
+download_patched_release_binary() {
+    info "Checking $PATCHED_RELEASE_REPO releases for a patched prebuilt binary..."
+    local auth_header=()
+    [ -n "${GITHUB_TOKEN:-}" ] && auth_header=(-H "Authorization: Bearer $GITHUB_TOKEN")
+
+    local asset_url
+    asset_url=$(curl -fsSL "${auth_header[@]}" "https://api.github.com/repos/$PATCHED_RELEASE_REPO/releases/latest" 2>/dev/null | \
+        grep "browser_download_url" | grep "cli-proxy-api-plus-$DOWNLOAD_ARCH" | head -1 | cut -d'"' -f4)
+
+    if [ -z "$asset_url" ]; then
+        info "No patched prebuilt binary for $DOWNLOAD_ARCH — will fall back to upstream release."
+        return 1
+    fi
+
+    info "Downloading patched binary: $(basename "$asset_url")"
+    mkdir -p "$INSTALL_DIR"
+    curl -fsSL "${auth_header[@]}" "$asset_url" -o "$BINARY_PATH" || return 1
+    chmod +x "$BINARY_PATH"
+    success "Downloaded patched release binary → $BINARY_PATH"
+    return 0
+}
+
 download_release_binary() {
     info "Fetching latest CLIProxyAPI release from $GITHUB_REPO..."
     local auth_header=()
@@ -338,7 +367,9 @@ install_proxy_binary() {
         warn "Install Go (e.g. apt-get install golang, or from https://go.dev/dl) and re-run to build from source."
         warn "Falling back to release download for now."
     fi
-    download_release_binary || { error "Could not install cli-proxy-api."; exit 1; }
+    # Patched prebuilt (this repo's releases) first — carries the vendored
+    # fixes; the raw upstream release does not.
+    download_patched_release_binary || download_release_binary || { error "Could not install cli-proxy-api."; exit 1; }
 
     local version
     version=$("$BINARY_PATH" --help 2>&1 | head -1 | grep -o 'Version: [^ ,]*' | cut -d' ' -f2 || echo "unknown")
