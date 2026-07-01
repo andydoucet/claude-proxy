@@ -74,6 +74,41 @@ bash scripts/sync-upstream.sh v6.9.31   # pin to a tag/branch/SHA
 
 This runs `git subtree pull --prefix=vendor/cliproxyapi --squash` and commits the merge onto your current branch. The working tree must be clean before you run it. See the script for details.
 
+## Claude Max models
+
+The installers register current Claude Max models as first-class proxy-routed models, including:
+
+- `claude-opus-4-8` — Opus 4.8
+- `claude-fable-5` — Fable 5
+- `claude-sonnet-4-6` — Sonnet 4.6
+- `claude-haiku-4-5` — Haiku 4.5
+
+The generated CLIProxy config also keeps convenience aliases for stable client usage:
+
+```yaml
+oauth-model-alias:
+  claude:
+    - name: claude-opus-4-8
+      alias: claude-opus-4.8
+      fork: true
+      force-mapping: true
+    - name: claude-sonnet-4-6
+      alias: claude-sonnet-latest
+      fork: true
+      force-mapping: true
+```
+
+Fable 5 is intentionally **not** aliased to another model. It routes only as `claude-fable-5`, so clients can tell when they are actually using Fable instead of a fallback wearing a fake mustache.
+
+Quick live check:
+
+```bash
+curl -s http://localhost:8317/v1/models | jq -r '.data[].id' | grep claude-fable-5
+curl -s http://localhost:8317/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"claude-fable-5","messages":[{"role":"user","content":"Reply exactly: FABLE5_OK"}],"max_tokens":32}'
+```
+
 ## Post-install authentication
 
 Re-auth any provider at any time:

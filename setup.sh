@@ -226,7 +226,10 @@ get_models_for_provider() {
     case "$1" in
         claude)
             # Order = menu order in Droid. First claude-opus-* entry wins as session default
-            # (see default_model_id selector below).
+            # (see default_model_id selector below). Fable 5 is available as a
+            # first-class direct model but intentionally does not masquerade as Opus.
+            echo "claude-opus-4-8|Opus 4.8 [Claude Max]|128000|anthropic|http://localhost:$PROXY_PORT"
+            echo "claude-fable-5|Fable 5 [Claude Max]|128000|anthropic|http://localhost:$PROXY_PORT"
             echo "claude-opus-4-7|Opus 4.7 [Claude Max]|128000|anthropic|http://localhost:$PROXY_PORT"
             echo "claude-opus-4-6|Opus 4.6 1M [Claude Max]|128000|anthropic|http://localhost:$PROXY_PORT"
             echo "claude-sonnet-4-6|Sonnet 4.6 [Claude Max]|64000|anthropic|http://localhost:$PROXY_PORT"
@@ -253,7 +256,7 @@ get_provider_name() {
 
 get_provider_desc() {
     case "$1" in
-        claude)          echo "Opus 4.7, Opus 4.6, Sonnet 4.6, Haiku 4.5" ;;
+        claude)          echo "Opus 4.8, Fable 5, Opus 4.7, Opus 4.6, Sonnet 4.6, Haiku 4.5" ;;
         codex)           echo "GPT-5-Codex, GPT-5" ;;
         antigravity)     echo "Gemini 3 Pro, Gemini 3 Flash" ;;
     esac
@@ -448,6 +451,28 @@ GPT_BLOCK
       params:
         "generationConfig.thinkingConfig.thinkingLevel": "high"
 GEMINI_AG_BLOCK
+    fi
+
+    if $has_claude; then
+        cat >> "$CONFIG_FILE" << 'CLAUDE_ALIAS_BLOCK'
+
+# OAuth model aliases. Direction is upstream real model -> client-visible alias.
+# Fable 5 is listed as a direct upstream model only; do not alias it to Opus/Sonnet.
+oauth-model-alias:
+  claude:
+    - name: claude-opus-4-8
+      alias: claude-opus-4.8
+      fork: true
+      force-mapping: true
+    - name: claude-sonnet-4-6
+      alias: claude-sonnet-latest
+      fork: true
+      force-mapping: true
+    - name: claude-sonnet-4-6
+      alias: claude-sonnet-4.6
+      fork: true
+      force-mapping: true
+CLAUDE_ALIAS_BLOCK
     fi
 
     success "Generated $CONFIG_FILE"
