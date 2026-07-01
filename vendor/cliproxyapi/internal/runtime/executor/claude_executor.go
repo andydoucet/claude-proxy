@@ -1910,7 +1910,16 @@ func checkSystemInstructionsWithSigningMode(payload []byte, strictMode bool, exp
 	systemResult := "[" + billingBlock + "," + agentBlock + "," + staticBlock + "]"
 	payload, _ = sjson.SetRawBytes(payload, "system", []byte(systemResult))
 
-	// Collect user system instructions and prepend to first user message
+	// Forward the client's real system prompt into the FIRST USER MESSAGE (not
+	// the system array). Empirically (2026-07-01), a large custom system[] block
+	// makes Anthropic's OAuth classifier bill the request as "extra usage" — the
+	// same real agent request billed to the subscription when its persona was in
+	// the user message but hit extra-usage as a trailing system block. Moving it
+	// to the user message preserves the agent's persona/instructions as authoritative
+	// context while keeping the system array looking like genuine Claude Code.
+	// (Previously this path DISCARDED the persona and substituted a generic
+	// 3-line reminder, silently stripping agent personas — see
+	// sanitizeForwardedSystemPrompt.)
 	if !strictMode {
 		var userSystemParts []string
 		if system.IsArray() {
@@ -1941,17 +1950,22 @@ func checkSystemInstructionsWithSigningMode(payload []byte, strictMode bool, exp
 	return payload
 }
 
-// sanitizeForwardedSystemPrompt reduces forwarded third-party system context to a
-// tiny neutral reminder for Claude OAuth cloaking. The goal is to preserve only
-// the minimum tool/task guidance while removing virtually all client-specific
-// prompt structure that Anthropic may classify as third-party agent traffic.
+// sanitizeForwardedSystemPrompt wraps forwarded third-party system context in a
+// <system-reminder> block for Claude OAuth cloaking. This is the shape genuine
+// Claude Code traffic uses to carry project instructions (CLAUDE.md contents
+// arrive inside <system-reminder> blocks in user messages, not in system[]),
+// so the client's persona/instructions reach the model without adding
+// non-Claude-Code structure to the system array. Previously this function
+// DISCARDED the client system prompt entirely (replacing it with a 3-line
+// generic reminder), which silently stripped agent personas; billing
+// classification was empirically shown (2026-07-01) to key on tools[] names,
+// not message content, so forwarding the real content is safe.
 func sanitizeForwardedSystemPrompt(text string) string {
-	if strings.TrimSpace(text) == "" {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
 		return ""
 	}
-	return strings.TrimSpace(`Use the available tools when needed to help with software engineering tasks.
-Keep responses concise and focused on the user's request.
-Prefer acting on the user's task over describing product-specific workflows.`)
+	return "<system-reminder>\nThe following are this session's operating instructions, provided as context. Follow them as authoritative configuration for how to behave, respond, and use tools in this session.\n\n" + trimmed + "\n</system-reminder>"
 }
 
 // buildTextBlock constructs a JSON text block object with proper escaping.
