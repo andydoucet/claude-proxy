@@ -4,6 +4,64 @@ A self-contained installer for [CLIProxyAPI](https://github.com/router-for-me/CL
 
 The upstream CLIProxyAPI source is vendored at `vendor/cliproxyapi/` via `git subtree`, so this repo is **standalone** — you can build, modify, and ship without depending on a live upstream.
 
+## Why this fork: subscription billing for agent traffic
+
+The reason this repo is a **patched** fork (not just an installer) is the Claude Max
+"extra usage" problem. Anthropic's OAuth billing classifier only bills a request to
+your **subscription** pool if the request looks like genuine Claude Code. Agent
+frameworks (Hermes, custom clients, MCP-heavy tools) send a request *shape* that
+gets classified as third-party and billed as **pay-per-token "extra usage"** instead —
+so with extra-usage disabled you get an immediate:
+
+```
+HTTP 400: You're out of extra usage. Add more at claude.ai/settings/usage and keep going.
+```
+
+…even while your subscription quota is nearly empty. This was confirmed by bisecting a
+real 328k-token agent request: the same request billed to the subscription once its
+request shape was corrected.
+
+**Two independent triggers, both fixed on the vendored source** (`internal/runtime/executor/claude_executor.go`):
+
+1. **Tool names.** Arbitrary tool names (`read_file`, `bash`, …) → extra-usage. Genuine
+   Claude Code sends MCP tools shaped `mcp__<server>__<tool>`, so the proxy prefixes
+   third-party tool names to `mcp__agent__<name>` (with lossless response-side
+   restoration, and leaving already-MCP-shaped and official Claude Code names untouched).
+2. **System prompt.** A large custom `system[]` block → extra-usage. The client's system
+   prompt is forwarded into the **first user message** instead, so `system[]` keeps only
+   the Claude Code identity blocks.
+
+Plus fingerprint hardening: a **stabilized device profile** (consistent macOS/arm64
+`X-Stainless-*` headers matching the `claude-cli` User-Agent, instead of leaking the
+Linux host), and an unconditional `x-client-request-id`. Net result: tool-bearing agent
+traffic returns `200` with `service_tier: standard` (subscription), not the extra-usage 400.
+
+> **You need the patched build for this.** The stock upstream `router-for-me/CLIProxyAPI`
+> release does **not** carry these fixes. `setup-linux.sh` downloads this repo's patched
+> release binary first, and building from `vendor/cliproxyapi/` (Go ≥ 1.26) always includes
+> them. The generated `config.yaml` already contains the `claude-header-defaults`
+> stabilization block — no extra config needed.
+
+**Verify it's working** (a *tool-bearing* request — tool-less requests bill to the
+subscription even unpatched, so they don't prove anything):
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8317/v1/messages \
+  -H 'Content-Type: application/json' -H 'anthropic-version: 2023-06-01' \
+  -d '{"model":"claude-fable-5","max_tokens":16,
+       "tools":[{"name":"read_file","input_schema":{"type":"object"}}],
+       "messages":[{"role":"user","content":"hi"}]}'
+# 200  -> billing to the Max subscription (patched, working)
+# 400  -> "out of extra usage" = unpatched binary, or subscription genuinely exhausted
+```
+
+> ⚠️ **Caveat.** This makes non-Claude-Code traffic *look like* Claude Code to obtain
+> subscription pricing. Anthropic actively polices this (it tightened, then partially
+> rolled back, mid-2026) and can change the classification at any time — treat it as
+> maintenance, not set-and-forget. It is against the spirit of Anthropic's ToS; use it
+> with your own subscription and your own judgment. The fully-legitimate alternative is
+> to route inference through the real `claude` CLI (`claude -p`), which *is* Claude Code.
+
 ## Repo layout
 
 ```
@@ -139,6 +197,24 @@ export ANTHROPIC_API_KEY=sk-dummy
 ```
 
 For Railway deployments, set `ANTHROPIC_BASE_URL=http://localhost:8317` as an environment variable.
+
+**Hermes Agent / per-channel model overrides.** If your consumer routes per model rather
+than a global base URL (e.g. Hermes `channel_model_overrides.json`), point that model at
+the proxy with full Anthropic routing:
+
+```json
+{
+  "model": "claude-fable-5",
+  "provider": "anthropic",
+  "base_url": "http://127.0.0.1:8317",
+  "api_mode": "anthropic_messages",
+  "api_key": "sk-dummy"
+}
+```
+
+The proxy exposes both the Anthropic (`/v1/messages`) and OpenAI (`/v1/chat/completions`)
+surfaces, so either `api_mode` works. Keep the proxy running as a long-lived localhost
+service (systemd on a VPS, or a boot-launched process + watchdog on Railway).
 
 ## What gets changed on your machine
 
