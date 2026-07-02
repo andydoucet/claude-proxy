@@ -1118,10 +1118,11 @@ func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string,
 		return errSessionID
 	}
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Claude-Code-Session-Id", sessionID)
-	// Per-request UUID, matches Claude Code's x-client-request-id for first-party API.
-	if isAnthropicBase {
-		misc.EnsureHeader(r.Header, ginHeaders, "x-client-request-id", uuid.New().String())
-	}
+	// Per-request UUID, matches Claude Code's x-client-request-id. The Anthropic
+	// SDK client generates this before any host-specific logic, so genuine Claude
+	// Code emits it regardless of base URL. Kept unconditional so a custom base_url
+	// override does not drop a header real Claude Code always sends.
+	misc.EnsureHeader(r.Header, ginHeaders, "x-client-request-id", uuid.New().String())
 	r.Header.Set("Connection", "keep-alive")
 	if stream {
 		r.Header.Set("Accept", "text/event-stream")
@@ -1518,6 +1519,25 @@ func reverseRemapOAuthToolNamesFromStreamLine(line []byte, reverseMap map[string
 	return updated
 }
 
+// isGenuineMCPToolName reports whether a tool name already has the real
+// Claude Code MCP shape mcp__<server>__<tool> (double underscores, non-empty
+// server and tool segments). Such names must NOT be re-prefixed: wrapping
+// mcp__nia__manage_resource in mcp__agent__ yields mcp__agent__mcp__nia__manage_resource,
+// a double-nested shape genuine Claude Code never emits and a prime extra-usage
+// fingerprint. Leaving them untouched is also lossless on the response side —
+// stripClaudeToolPrefixFromResponse only strips the exact proxy prefix, so an
+// unprefixed genuine MCP name round-trips unchanged. Note our own single-
+// underscore agent tools (e.g. mcp_memory_crystal_recall) start with "mcp_" not
+// "mcp__", so they are still prefixed correctly.
+func isGenuineMCPToolName(name string) bool {
+	if !strings.HasPrefix(name, "mcp__") {
+		return false
+	}
+	rest := name[len("mcp__"):]
+	idx := strings.Index(rest, "__")
+	return idx > 0 && idx+2 < len(rest)
+}
+
 func applyClaudeToolPrefix(body []byte, prefix string) []byte {
 	if prefix == "" {
 		return body
@@ -1538,7 +1558,7 @@ func applyClaudeToolPrefix(body []byte, prefix string) []byte {
 				return true
 			}
 			name := tool.Get("name").String()
-			if name == "" || strings.HasPrefix(name, prefix) || officialClaudeToolNames[name] {
+			if name == "" || strings.HasPrefix(name, prefix) || isGenuineMCPToolName(name) || officialClaudeToolNames[name] {
 				return true
 			}
 			path := fmt.Sprintf("tools.%d.name", index.Int())
@@ -1549,7 +1569,7 @@ func applyClaudeToolPrefix(body []byte, prefix string) []byte {
 
 	if gjson.GetBytes(body, "tool_choice.type").String() == "tool" {
 		name := gjson.GetBytes(body, "tool_choice.name").String()
-		if name != "" && !strings.HasPrefix(name, prefix) && !builtinTools[name] && !officialClaudeToolNames[name] {
+		if name != "" && !strings.HasPrefix(name, prefix) && !isGenuineMCPToolName(name) && !builtinTools[name] && !officialClaudeToolNames[name] {
 			body, _ = sjson.SetBytes(body, "tool_choice.name", prefix+name)
 		}
 	}
@@ -1565,14 +1585,14 @@ func applyClaudeToolPrefix(body []byte, prefix string) []byte {
 				switch partType {
 				case "tool_use":
 					name := part.Get("name").String()
-					if name == "" || strings.HasPrefix(name, prefix) || builtinTools[name] || officialClaudeToolNames[name] {
+					if name == "" || strings.HasPrefix(name, prefix) || isGenuineMCPToolName(name) || builtinTools[name] || officialClaudeToolNames[name] {
 						return true
 					}
 					path := fmt.Sprintf("messages.%d.content.%d.name", msgIndex.Int(), contentIndex.Int())
 					body, _ = sjson.SetBytes(body, path, prefix+name)
 				case "tool_reference":
 					toolName := part.Get("tool_name").String()
-					if toolName == "" || strings.HasPrefix(toolName, prefix) || builtinTools[toolName] || officialClaudeToolNames[toolName] {
+					if toolName == "" || strings.HasPrefix(toolName, prefix) || isGenuineMCPToolName(toolName) || builtinTools[toolName] || officialClaudeToolNames[toolName] {
 						return true
 					}
 					path := fmt.Sprintf("messages.%d.content.%d.tool_name", msgIndex.Int(), contentIndex.Int())
@@ -1584,7 +1604,7 @@ func applyClaudeToolPrefix(body []byte, prefix string) []byte {
 						nestedContent.ForEach(func(nestedIndex, nestedPart gjson.Result) bool {
 							if nestedPart.Get("type").String() == "tool_reference" {
 								nestedToolName := nestedPart.Get("tool_name").String()
-								if nestedToolName != "" && !strings.HasPrefix(nestedToolName, prefix) && !builtinTools[nestedToolName] && !officialClaudeToolNames[nestedToolName] {
+								if nestedToolName != "" && !strings.HasPrefix(nestedToolName, prefix) && !isGenuineMCPToolName(nestedToolName) && !builtinTools[nestedToolName] && !officialClaudeToolNames[nestedToolName] {
 									nestedPath := fmt.Sprintf("messages.%d.content.%d.content.%d.tool_name", msgIndex.Int(), contentIndex.Int(), nestedIndex.Int())
 									body, _ = sjson.SetBytes(body, nestedPath, prefix+nestedToolName)
 								}

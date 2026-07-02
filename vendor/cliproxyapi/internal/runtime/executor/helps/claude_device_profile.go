@@ -19,6 +19,13 @@ import (
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
+// Fallback Claude Code fingerprint values, used when config's
+// claude-header-defaults block is empty. KEEP IN LOCKSTEP with each other and
+// with claude-header-defaults.user-agent / .package-version in config.yaml and
+// helps.DefaultClaudeVersion(): the impersonated release version appears in the
+// User-Agent, the package version, and the injected billing/system cc_version.
+// Bump all three together on every impersonated Claude Code release so the
+// fingerprint (UA + package + cc_version + OS/arch) can never contradict itself.
 const (
 	defaultClaudeFingerprintUserAgent      = "claude-cli/2.1.63 (external, cli)"
 	defaultClaudeFingerprintPackageVersion = "0.74.0"

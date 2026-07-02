@@ -687,12 +687,12 @@ func TestApplyClaudeToolPrefix_BuiltinToolSkipped(t *testing.T) {
 	body := []byte(`{
 		"tools": [
 			{"type": "web_search_20250305", "name": "web_search", "max_uses": 5},
-			{"name": "Read"}
+			{"name": "custom_read"}
 		],
 		"messages": [
 			{"role": "user", "content": [
 				{"type": "tool_use", "name": "web_search", "id": "ws1", "input": {}},
-				{"type": "tool_use", "name": "Read", "id": "r1", "input": {}}
+				{"type": "tool_use", "name": "custom_read", "id": "r1", "input": {}}
 			]}
 		]
 	}`)
@@ -704,18 +704,18 @@ func TestApplyClaudeToolPrefix_BuiltinToolSkipped(t *testing.T) {
 	if got := gjson.GetBytes(out, "messages.0.content.0.name").String(); got != "web_search" {
 		t.Fatalf("messages.0.content.0.name = %q, want %q", got, "web_search")
 	}
-	if got := gjson.GetBytes(out, "tools.1.name").String(); got != "proxy_Read" {
-		t.Fatalf("tools.1.name = %q, want %q", got, "proxy_Read")
+	if got := gjson.GetBytes(out, "tools.1.name").String(); got != "proxy_custom_read" {
+		t.Fatalf("tools.1.name = %q, want %q", got, "proxy_custom_read")
 	}
-	if got := gjson.GetBytes(out, "messages.0.content.1.name").String(); got != "proxy_Read" {
-		t.Fatalf("messages.0.content.1.name = %q, want %q", got, "proxy_Read")
+	if got := gjson.GetBytes(out, "messages.0.content.1.name").String(); got != "proxy_custom_read" {
+		t.Fatalf("messages.0.content.1.name = %q, want %q", got, "proxy_custom_read")
 	}
 }
 
 func TestApplyClaudeToolPrefix_KnownBuiltinInHistoryOnly(t *testing.T) {
 	body := []byte(`{
 		"tools": [
-			{"name": "Read"}
+			{"name": "custom_read"}
 		],
 		"messages": [
 			{"role": "user", "content": [
@@ -728,34 +728,34 @@ func TestApplyClaudeToolPrefix_KnownBuiltinInHistoryOnly(t *testing.T) {
 	if got := gjson.GetBytes(out, "messages.0.content.0.name").String(); got != "web_search" {
 		t.Fatalf("messages.0.content.0.name = %q, want %q", got, "web_search")
 	}
-	if got := gjson.GetBytes(out, "tools.0.name").String(); got != "proxy_Read" {
-		t.Fatalf("tools.0.name = %q, want %q", got, "proxy_Read")
+	if got := gjson.GetBytes(out, "tools.0.name").String(); got != "proxy_custom_read" {
+		t.Fatalf("tools.0.name = %q, want %q", got, "proxy_custom_read")
 	}
 }
 
 func TestApplyClaudeToolPrefix_CustomToolsPrefixed(t *testing.T) {
 	body := []byte(`{
-		"tools": [{"name": "Read"}, {"name": "Write"}],
+		"tools": [{"name": "custom_read"}, {"name": "custom_write"}],
 		"messages": [
 			{"role": "user", "content": [
-				{"type": "tool_use", "name": "Read", "id": "r1", "input": {}},
-				{"type": "tool_use", "name": "Write", "id": "w1", "input": {}}
+				{"type": "tool_use", "name": "custom_read", "id": "r1", "input": {}},
+				{"type": "tool_use", "name": "custom_write", "id": "w1", "input": {}}
 			]}
 		]
 	}`)
 	out := applyClaudeToolPrefix(body, "proxy_")
 
-	if got := gjson.GetBytes(out, "tools.0.name").String(); got != "proxy_Read" {
-		t.Fatalf("tools.0.name = %q, want %q", got, "proxy_Read")
+	if got := gjson.GetBytes(out, "tools.0.name").String(); got != "proxy_custom_read" {
+		t.Fatalf("tools.0.name = %q, want %q", got, "proxy_custom_read")
 	}
-	if got := gjson.GetBytes(out, "tools.1.name").String(); got != "proxy_Write" {
-		t.Fatalf("tools.1.name = %q, want %q", got, "proxy_Write")
+	if got := gjson.GetBytes(out, "tools.1.name").String(); got != "proxy_custom_write" {
+		t.Fatalf("tools.1.name = %q, want %q", got, "proxy_custom_write")
 	}
-	if got := gjson.GetBytes(out, "messages.0.content.0.name").String(); got != "proxy_Read" {
-		t.Fatalf("messages.0.content.0.name = %q, want %q", got, "proxy_Read")
+	if got := gjson.GetBytes(out, "messages.0.content.0.name").String(); got != "proxy_custom_read" {
+		t.Fatalf("messages.0.content.0.name = %q, want %q", got, "proxy_custom_read")
 	}
-	if got := gjson.GetBytes(out, "messages.0.content.1.name").String(); got != "proxy_Write" {
-		t.Fatalf("messages.0.content.1.name = %q, want %q", got, "proxy_Write")
+	if got := gjson.GetBytes(out, "messages.0.content.1.name").String(); got != "proxy_custom_write" {
+		t.Fatalf("messages.0.content.1.name = %q, want %q", got, "proxy_custom_write")
 	}
 }
 
@@ -778,7 +778,7 @@ func TestApplyClaudeToolPrefix_KnownFallbackBuiltinsRemainUnprefixed(t *testing.
 	for _, builtin := range []string{"web_search", "code_execution", "text_editor", "computer"} {
 		t.Run(builtin, func(t *testing.T) {
 			input := []byte(fmt.Sprintf(`{
-				"tools":[{"name":"Read"}],
+				"tools":[{"name":"custom_read"}],
 				"tool_choice":{"type":"tool","name":%q},
 				"messages":[{"role":"assistant","content":[{"type":"tool_use","name":%q,"id":"toolu_1","input":{}},{"type":"tool_reference","tool_name":%q},{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"tool_reference","tool_name":%q}]}]}]
 			}`, builtin, builtin, builtin, builtin))
@@ -796,8 +796,8 @@ func TestApplyClaudeToolPrefix_KnownFallbackBuiltinsRemainUnprefixed(t *testing.
 			if got := gjson.GetBytes(out, "messages.0.content.2.content.0.tool_name").String(); got != builtin {
 				t.Fatalf("messages.0.content.2.content.0.tool_name = %q, want %q", got, builtin)
 			}
-			if got := gjson.GetBytes(out, "tools.0.name").String(); got != "proxy_Read" {
-				t.Fatalf("tools.0.name = %q, want %q", got, "proxy_Read")
+			if got := gjson.GetBytes(out, "tools.0.name").String(); got != "proxy_custom_read" {
+				t.Fatalf("tools.0.name = %q, want %q", got, "proxy_custom_read")
 			}
 		})
 	}
@@ -854,11 +854,58 @@ func TestStripClaudeToolPrefixFromStreamLine_WithToolReference(t *testing.T) {
 }
 
 func TestApplyClaudeToolPrefix_NestedToolReference(t *testing.T) {
-	input := []byte(`{"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_123","content":[{"type":"tool_reference","tool_name":"mcp__nia__manage_resource"}]}]}]}`)
+	// A genuine MCP-shaped name (mcp__<server>__<tool>) must be left untouched so
+	// it is not double-nested (mcp__agent__mcp__nia__...); a non-MCP nested name
+	// still gets prefixed.
+	input := []byte(`{"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_123","content":[{"type":"tool_reference","tool_name":"mcp__nia__manage_resource"},{"type":"tool_reference","tool_name":"custom_tool"}]}]}]}`)
 	out := applyClaudeToolPrefix(input, "proxy_")
-	got := gjson.GetBytes(out, "messages.0.content.0.content.0.tool_name").String()
-	if got != "proxy_mcp__nia__manage_resource" {
-		t.Fatalf("nested tool_reference tool_name = %q, want %q", got, "proxy_mcp__nia__manage_resource")
+	if got := gjson.GetBytes(out, "messages.0.content.0.content.0.tool_name").String(); got != "mcp__nia__manage_resource" {
+		t.Fatalf("genuine MCP nested tool_reference should be left unprefixed, got %q", got)
+	}
+	if got := gjson.GetBytes(out, "messages.0.content.0.content.1.tool_name").String(); got != "proxy_custom_tool" {
+		t.Fatalf("non-MCP nested tool_reference should be prefixed, got %q", got)
+	}
+}
+
+func TestIsGenuineMCPToolName(t *testing.T) {
+	cases := map[string]bool{
+		"mcp__nia__manage_resource":            true,
+		"mcp__github__create_issue":            true,
+		"mcp__a__b":                            true,
+		"mcp__server__":                        false, // empty tool segment
+		"mcp__":                                false,
+		"mcp_memory_crystal_recall":            false, // single underscore: our own agent tool
+		"read_file":                            false,
+		"Bash":                                 false,
+		"":                                     false,
+		"mcp__agent__mcp__nia__manage_resource": true, // already double-nested still matches (already prefixed anyway)
+	}
+	for name, want := range cases {
+		if got := isGenuineMCPToolName(name); got != want {
+			t.Errorf("isGenuineMCPToolName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestApplyClaudeToolPrefix_GenuineMCPNotDoubleNested(t *testing.T) {
+	// Genuine mcp__server__tool names stay untouched; non-MCP names get prefixed.
+	input := []byte(`{"tools":[{"name":"mcp__nia__manage_resource"},{"name":"my_custom"}],"tool_choice":{"type":"tool","name":"mcp__nia__manage_resource"}}`)
+	out := applyClaudeToolPrefix(input, "mcp__agent__")
+	if got := gjson.GetBytes(out, "tools.0.name").String(); got != "mcp__nia__manage_resource" {
+		t.Fatalf("genuine MCP tool should stay unprefixed, got %q", got)
+	}
+	if got := gjson.GetBytes(out, "tools.1.name").String(); got != "mcp__agent__my_custom" {
+		t.Fatalf("non-MCP tool should be prefixed, got %q", got)
+	}
+	if got := gjson.GetBytes(out, "tool_choice.name").String(); got != "mcp__nia__manage_resource" {
+		t.Fatalf("genuine MCP tool_choice should stay unprefixed, got %q", got)
+	}
+	// Round-trip: an unprefixed genuine name comes back from the model unchanged
+	// and strip leaves it intact (lossless).
+	resp := []byte(`{"content":[{"type":"tool_use","name":"mcp__nia__manage_resource"}]}`)
+	stripped := stripClaudeToolPrefixFromResponse(resp, "mcp__agent__")
+	if got := gjson.GetBytes(stripped, "content.0.name").String(); got != "mcp__nia__manage_resource" {
+		t.Fatalf("round-trip should preserve genuine MCP name, got %q", got)
 	}
 }
 
@@ -2835,17 +2882,21 @@ func TestPrepareClaudeOAuthToolNamesForUpstream_MixedCaseWithPrefix(t *testing.T
 
 	out, reverseMap := prepareClaudeOAuthToolNamesForUpstream(body, "proxy_", false)
 
-	if got := gjson.GetBytes(out, "tools.0.name").String(); got != "proxy_Bash" {
-		t.Fatalf("tools.0.name = %q, want %q", got, "proxy_Bash")
+	// Bash is already an official Claude Code tool name and glob is remapped to
+	// the official Glob; official names are left BARE (not proxy_-prefixed) so the
+	// wire matches how genuine Claude Code sends its native tools. The reverse map
+	// still records the glob->Glob rename so the response is restored losslessly.
+	if got := gjson.GetBytes(out, "tools.0.name").String(); got != "Bash" {
+		t.Fatalf("tools.0.name = %q, want %q", got, "Bash")
 	}
-	if got := gjson.GetBytes(out, "tools.1.name").String(); got != "proxy_Glob" {
-		t.Fatalf("tools.1.name = %q, want %q", got, "proxy_Glob")
+	if got := gjson.GetBytes(out, "tools.1.name").String(); got != "Glob" {
+		t.Fatalf("tools.1.name = %q, want %q", got, "Glob")
 	}
-	if got := gjson.GetBytes(out, "messages.0.content.0.name").String(); got != "proxy_Bash" {
-		t.Fatalf("messages.0.content.0.name = %q, want %q", got, "proxy_Bash")
+	if got := gjson.GetBytes(out, "messages.0.content.0.name").String(); got != "Bash" {
+		t.Fatalf("messages.0.content.0.name = %q, want %q", got, "Bash")
 	}
-	if got := gjson.GetBytes(out, "messages.0.content.1.name").String(); got != "proxy_Glob" {
-		t.Fatalf("messages.0.content.1.name = %q, want %q", got, "proxy_Glob")
+	if got := gjson.GetBytes(out, "messages.0.content.1.name").String(); got != "Glob" {
+		t.Fatalf("messages.0.content.1.name = %q, want %q", got, "Glob")
 	}
 	if len(reverseMap) != 1 || reverseMap["Glob"] != "glob" {
 		t.Fatalf("reverseMap = %v, want {Glob:glob}", reverseMap)

@@ -631,6 +631,21 @@ usage-statistics-enabled: true
 proxy-url: ""
 request-retry: 3
 
+# Pin the Claude Code device fingerprint so it is self-consistent regardless of
+# the HOST os/arch. Without this block the proxy takes the legacy header path,
+# which sends a macOS User-Agent (claude-cli/...) but derives X-Stainless-Os /
+# X-Stainless-Arch from the running host (on Linux/Railway -> "Linux"/"x64") — an
+# internally contradictory triple no genuine Claude Code install produces, and a
+# cheap fingerprint for Anthropic's OAuth billing classifier. Stabilized mode
+# pins the whole macOS/arm64 triple to match the User-Agent and package version.
+claude-header-defaults:
+  stabilize-device-profile: true
+  user-agent: "claude-cli/2.1.63 (external, cli)"
+  package-version: "0.74.0"
+  runtime-version: "v24.3.0"
+  os: "MacOS"
+  arch: "arm64"
+
 # Auto-switch on rate limits
 quota-exceeded:
   switch-project: true
